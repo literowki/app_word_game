@@ -1,0 +1,113 @@
+package com.example.appwordgame.ui.game
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.appwordgame.game.GamePhase
+import com.example.appwordgame.game.GameViewModel
+
+@Composable
+fun GameScreen(modifier: Modifier = Modifier) {
+    val vm: GameViewModel = viewModel()
+    val state by vm.uiState.collectAsState()
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF08111E))
+    ) {
+        if (state.dictionaryLoading) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(color = Color(0xFFFFD700))
+                Text(
+                    text = "Ładowanie słownika…",
+                    color = Color(0xFF9CB2CC),
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+            }
+        } else {
+            Column(modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.navigationBars)
+            ) {
+                ScoreBar(
+                    state = state,
+                    onResign = vm::onResign,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                BoardComposable(
+                    state = state,
+                    onCellTapped = vm::onBoardCellTapped,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+
+                RackComposable(
+                    tiles = state.currentRack,
+                    selectedIndex = state.selectedRackIndex,
+                    onTileTapped = vm::onRackTileTapped,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                ActionBar(
+                    state = state,
+                    onSubmit = vm::onSubmit,
+                    onPass = vm::onPass,
+                    onExchange = vm::onExchangeOpen,
+                    onShuffle = vm::onShuffleRack,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (state.blankPickerPosition != null) {
+                BlankLetterDialog(
+                    onLetterChosen = vm::onBlankLetterChosen,
+                    onDismiss = vm::onBlankPickerDismissed
+                )
+            }
+
+            if (state.showExchangeDialog) {
+                ExchangeDialog(
+                    state = state,
+                    onToggle = vm::onExchangeTileToggled,
+                    onConfirm = vm::onExchangeConfirm,
+                    onCancel = vm::onExchangeCancel
+                )
+            }
+
+            val result = state.gameResult
+            if (state.phase == GamePhase.FINISHED && result != null) {
+                EndGameOverlay(
+                    result = result,
+                    onNewGame = vm::onNewGame,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                )
+            }
+        }
+    }
+}

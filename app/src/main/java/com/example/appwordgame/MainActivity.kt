@@ -14,8 +14,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -49,10 +52,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.appwordgame.ui.game.GameScreen
 import com.example.appwordgame.ui.theme.AppWordGameTheme
 import com.example.appwordgame.webrtc.ChatMessage
 import com.example.appwordgame.webrtc.WebRtcChatEngine
 import com.example.appwordgame.webrtc.WebRtcChatUiState
+
+private enum class Screen { GAME, CHAT }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +67,37 @@ class MainActivity : ComponentActivity() {
         setContent {
             AppWordGameTheme(dynamicColor = false) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF08111E)) {
-                    PeerChatApp()
+                    var screen by rememberSaveable { mutableStateOf(Screen.GAME) }
+                    Column(modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                    ) {
+                        // Tab bar
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF060E1A))
+                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TabButton(
+                                label = "Gra",
+                                selected = screen == Screen.GAME,
+                                onClick = { screen = Screen.GAME },
+                                modifier = Modifier.weight(1f)
+                            )
+                            TabButton(
+                                label = "WebRTC",
+                                selected = screen == Screen.CHAT,
+                                onClick = { screen = Screen.CHAT },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        when (screen) {
+                            Screen.GAME -> GameScreen(modifier = Modifier.weight(1f))
+                            Screen.CHAT -> PeerChatApp(modifier = Modifier.weight(1f))
+                        }
+                    }
                 }
             }
         }
@@ -69,7 +105,16 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun PeerChatApp() {
+private fun TabButton(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    if (selected) {
+        Button(onClick = onClick, modifier = modifier) { Text(label) }
+    } else {
+        OutlinedButton(onClick = onClick, modifier = modifier) { Text(label) }
+    }
+}
+
+@Composable
+private fun PeerChatApp(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val engine = remember(context) { WebRtcChatEngine(context) }
     val state by engine.state.collectAsState()
@@ -87,7 +132,8 @@ private fun PeerChatApp() {
         onApplyRemoteDescription = engine::setRemoteDescription,
         onApplyRemoteCandidates = engine::addRemoteCandidates,
         onReset = engine::reset,
-        onSendMessage = engine::sendMessage
+        onSendMessage = engine::sendMessage,
+        modifier = modifier
     )
 }
 
@@ -101,7 +147,8 @@ private fun PeerChatScreen(
     onApplyRemoteDescription: (String) -> Unit,
     onApplyRemoteCandidates: (String) -> Unit,
     onReset: () -> Unit,
-    onSendMessage: (String) -> Unit
+    onSendMessage: (String) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var remoteDescriptionText by rememberSaveable { mutableStateOf("") }
     var remoteCandidatesText by rememberSaveable { mutableStateOf("") }
@@ -109,7 +156,7 @@ private fun PeerChatScreen(
     val scrollState = rememberScrollState()
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(
                 brush = Brush.radialGradient(
