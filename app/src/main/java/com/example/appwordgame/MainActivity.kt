@@ -149,11 +149,17 @@ private fun AppNavigation() {
                 val st by mgr.state.collectAsState()
                 LaunchedEffect(st.status, st.hostNickname, st.players) {
                     when (st.status) {
-                        SessionStatus.CONNECTED -> joinVm.onLobbyUpdated(st.hostNickname, st.players)
-                        SessionStatus.IN_GAME -> navController.navigate("game") {
-                            popUpTo("welcome") { inclusive = false }
+                        SessionStatus.CONNECTED, SessionStatus.WAITING_FOR_GAME_START -> {
+                            joinVm.onLobbyUpdated(st.hostNickname, st.players)
                         }
-                        SessionStatus.ERROR -> joinVm.onError(st.error ?: "Connection error")
+                        SessionStatus.IN_GAME -> {
+                            navController.navigate("game") {
+                                popUpTo("welcome") { inclusive = false }
+                            }
+                        }
+                        SessionStatus.ERROR -> {
+                            joinVm.onError(st.error ?: "Connection error")
+                        }
                         else -> {}
                     }
                 }
@@ -176,7 +182,9 @@ private fun AppNavigation() {
 
         composable("game") {
             val sessionManager = app.gameSessionManager
-            val initialState = sessionManager?.state?.value?.gameStateJson
+            // Properly observe the state so Compose knows to recompose when it changes
+            val sessionState by sessionManager?.state?.collectAsState() ?: remember { mutableStateOf(null) }
+            val initialState = sessionState?.gameStateJson
             val players = sessionManager?.state?.value?.players ?: emptyList()
             val nicknames = players.mapIndexed { idx, info -> idx to info.nickname }.toMap()
             val localIdx = if (sessionManager?.isHost == true) 0 else 1
