@@ -214,6 +214,12 @@ private fun PeerChatScreen(
                         StatusChip(label = "Channel", value = state.dataChannelState)
                         StatusChip(label = "Role", value = state.role)
                         StatusChip(label = "ICE", value = state.iceGatheringState)
+                        StatusChip(label = "Local id", value = state.localPeerId.ifBlank { "-" })
+                        StatusChip(label = "Relay", value = state.relayPeerId ?: "-")
+                        StatusChip(
+                            label = "Peers",
+                            value = if (state.connectedPeers.isEmpty()) "None" else state.connectedPeers.joinToString(", ")
+                        )
                     }
 
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -318,7 +324,7 @@ private fun PeerChatScreen(
                             minLines = 1,
                             maxLines = 4,
                             shape = RoundedCornerShape(18.dp),
-                            enabled = state.dataChannelState.equals("open", ignoreCase = true)
+                            enabled = state.isDataChannelOpen
                         )
                         Button(
                             onClick = {
@@ -329,7 +335,7 @@ private fun PeerChatScreen(
                                 }
                             },
                             modifier = Modifier.align(Alignment.End),
-                            enabled = state.dataChannelState.equals("open", ignoreCase = true),
+                            enabled = state.isDataChannelOpen,
                             contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp)
                         ) {
                             Text("Send")
@@ -459,6 +465,7 @@ private fun SignalSection(
 private fun MessageBubble(message: ChatMessage) {
     val bubbleColor = if (message.mine) Color(0xFF163B2B) else Color(0xFF14273D)
     val alignment = if (message.mine) Arrangement.End else Arrangement.Start
+    val sender = if (message.mine) "You" else message.fromPeerId ?: "Peer"
 
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = alignment) {
         Card(
@@ -466,6 +473,7 @@ private fun MessageBubble(message: ChatMessage) {
             shape = RoundedCornerShape(18.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(text = sender, color = Color(0xFF9CB2CC), style = MaterialTheme.typography.labelSmall)
                 Text(text = message.text, color = Color.White)
                 Text(text = message.timestamp, color = Color(0xFF9CB2CC), style = MaterialTheme.typography.labelSmall)
             }
