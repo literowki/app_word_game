@@ -17,4 +17,7 @@ data class GameUiState(
     val moveError: String? = null,
     val lastMoveWords: List<String> = emptyList(),
     val lastMoveScore: Int = 0,
+    val playerNicknames: Map<Player, String> = emptyMap(),
+    val localPlayerIndex: Int = 0,
+    val playerCount: Int = 2,
 )

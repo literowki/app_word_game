@@ -43,10 +43,9 @@ private val TILE_BG       = Color(0xFFD4A017)
 private val TILE_SELECTED = Color(0xFFFBBF24)
 private val TILE_TEXT     = Color(0xFF1A0A00)
 
-// ── Score bar ─────────────────────────────────────────────────────────────────
-
 @Composable
 fun ScoreBar(state: GameUiState, onResign: () -> Unit, modifier: Modifier = Modifier) {
+    val players = state.scores.keys.sortedBy { it.ordinal }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -54,46 +53,40 @@ fun ScoreBar(state: GameUiState, onResign: () -> Unit, modifier: Modifier = Modi
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            PlayerScore(
-                label = "Gracz 1",
-                score = state.scores[Player.ONE] ?: 0,
-                active = state.currentPlayer == Player.ONE && state.phase == GamePhase.PLAYING,
-                onResign = onResign
-            )
-        }
-        Column(
-            modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "${state.bagRemaining}",
-                color = Color(0xFF9CB2CC),
-                fontSize = 13.sp
-            )
-            if (state.lastMoveWords.isNotEmpty()) {
-                Text(
-                    text = state.lastMoveWords.joinToString(", ") + "  +${state.lastMoveScore}",
-                    color = Color(0xFFFFD700),
-                    fontSize = 11.sp,
-                    textAlign = TextAlign.Center
+        players.forEachIndexed { index, player ->
+            if (index > 0) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "${state.bagRemaining}",
+                        color = Color(0xFF9CB2CC),
+                        fontSize = 13.sp
+                    )
+                    if (state.lastMoveWords.isNotEmpty()) {
+                        Text(
+                            text = state.lastMoveWords.joinToString(", ") + "  +${state.lastMoveScore}",
+                            color = Color(0xFFFFD700),
+                            fontSize = 11.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = if (index == 0) Alignment.CenterStart else Alignment.CenterEnd
+            ) {
+                val nickname = state.playerNicknames[player] ?: "Gracz ${player.ordinal + 1}"
+                PlayerScore(
+                    label = nickname,
+                    score = state.scores[player] ?: 0,
+                    active = state.currentPlayer == player && state.phase == GamePhase.PLAYING,
+                    onResign = onResign,
+                    resignOnLeft = index > 0
                 )
             }
-        }
-        Box(
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.CenterEnd
-        ) {
-            PlayerScore(
-                label = "Gracz 2",
-                score = state.scores[Player.TWO] ?: 0,
-                active = state.currentPlayer == Player.TWO && state.phase == GamePhase.PLAYING,
-                onResign = onResign,
-                resignOnLeft = true
-            )
         }
     }
 }
@@ -177,8 +170,6 @@ private fun PlayerScore(
     }
 }
 
-// ── Rack ──────────────────────────────────────────────────────────────────────
-
 @Composable
 fun RackComposable(
     tiles: List<Tile>,
@@ -202,7 +193,6 @@ fun RackComposable(
             )
             if (index < tiles.size - 1) Spacer(Modifier.width(4.dp))
         }
-        // Empty slots
         repeat(7 - tiles.size) {
             EmptyRackSlot()
             Spacer(Modifier.width(4.dp))
@@ -256,8 +246,6 @@ private fun EmptyRackSlot() {
             .border(1.dp, Color(0xFF1A3050), RoundedCornerShape(4.dp))
     )
 }
-
-// ── Action bar ────────────────────────────────────────────────────────────────
 
 @Composable
 fun ActionBar(
@@ -318,8 +306,6 @@ fun ActionBar(
         }
     }
 }
-
-// ── Exchange dialog ───────────────────────────────────────────────────────────
 
 @Composable
 fun ExchangeDialog(
@@ -393,8 +379,6 @@ fun ExchangeDialog(
     )
 }
 
-// ── Blank letter picker ───────────────────────────────────────────────────────
-
 private val POLISH_LETTERS = "AĄBCĆDEĘFGHIJKLŁMNŃOÓPRSŚTUWYZŹŻ".toList()
 
 @Composable
@@ -443,11 +427,10 @@ fun BlankLetterDialog(onLetterChosen: (Char) -> Unit, onDismiss: () -> Unit) {
     )
 }
 
-// ── End-game overlay ──────────────────────────────────────────────────────────
-
 @Composable
 fun EndGameOverlay(
     result: GameResult,
+    playerNicknames: Map<Player, String>,
     onNewGame: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -461,10 +444,11 @@ fun EndGameOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            val winnerText = when (result.winner) {
-                Player.ONE -> "Gracz 1 wygrywa!"
-                Player.TWO -> "Gracz 2 wygrywa!"
-                null        -> "Remis!"
+            val winnerText = if (result.winner != null) {
+                val name = playerNicknames[result.winner] ?: "Gracz ${result.winner.ordinal + 1}"
+                "$name wygrywa!"
+            } else {
+                "Remis!"
             }
             Text(
                 text = winnerText,
@@ -472,8 +456,14 @@ fun EndGameOverlay(
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Bold
             )
+            val scoresText = result.finalScores.entries
+                .sortedBy { it.key.ordinal }
+                .joinToString("  |  ") { (player, score) ->
+                    val name = playerNicknames[player] ?: "Gracz ${player.ordinal + 1}"
+                    "$name: $score"
+                }
             Text(
-                text = "Gracz 1: ${result.finalScores[Player.ONE] ?: 0}  |  Gracz 2: ${result.finalScores[Player.TWO] ?: 0}",
+                text = scoresText,
                 color = Color.White,
                 fontSize = 16.sp
             )

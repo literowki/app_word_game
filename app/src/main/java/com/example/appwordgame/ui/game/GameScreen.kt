@@ -24,9 +24,18 @@ import com.example.appwordgame.game.GamePhase
 import com.example.appwordgame.game.GameViewModel
 
 @Composable
-fun GameScreen(modifier: Modifier = Modifier) {
+fun GameScreen(
+    modifier: Modifier = Modifier,
+    initialState: String? = null,
+    playerNicknames: Map<Int, String> = emptyMap(),
+    localPlayerIndex: Int = 0,
+) {
     val vm: GameViewModel = viewModel()
     val state by vm.uiState.collectAsState()
+
+    if (initialState != null && state.dictionaryLoading) {
+        vm.loadFromSerializedState(initialState, playerNicknames, localPlayerIndex)
+    }
 
     Box(
         modifier = modifier
@@ -102,6 +111,7 @@ fun GameScreen(modifier: Modifier = Modifier) {
             if (state.phase == GamePhase.FINISHED && result != null) {
                 EndGameOverlay(
                     result = result,
+                    playerNicknames = state.playerNicknames,
                     onNewGame = vm::onNewGame,
                     modifier = Modifier
                         .align(Alignment.Center)

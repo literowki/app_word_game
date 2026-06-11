@@ -2,8 +2,6 @@ package com.example.appwordgame.game
 
 import kotlin.random.Random
 
-enum class Player { ONE, TWO }
-
 enum class GamePhase { PLAYING, FINISHED }
 
 enum class EndReason { TILES_EXHAUSTED, CONSECUTIVE_SCORELESS_TURNS, RESIGNATION }
@@ -34,19 +32,21 @@ sealed class TurnActionResult {
 
 class GameEngine(
     val dictionary: Dictionary,
-    random: Random = Random.Default
+    random: Random = Random.Default,
+    val playerCount: Int = 2,
 ) {
+    val players: List<Player> = Player.activePlayers(playerCount)
     val bag: TileBag = TileBag.standard(random)
     val board: Board = Board()
     val racks: MutableMap<Player, MutableList<Tile>> = mutableMapOf()
     val scores: MutableMap<Player, Int> = mutableMapOf()
-    var currentPlayer: Player = Player.ONE
+    var currentPlayer: Player = players.first()
     var consecutiveScoelessTurns: Int = 0
     var phase: GamePhase = GamePhase.PLAYING
     var gameResult: GameResult? = null
 
     init {
-        Player.entries.forEach { player ->
+        players.forEach { player ->
             racks[player] = bag.draw(7).toMutableList()
             scores[player] = 0
         }
@@ -56,7 +56,6 @@ class GameEngine(
         if (phase == GamePhase.FINISHED) return MoveResult.GameOver
         if (player != currentPlayer) return MoveResult.WrongPlayer
 
-        // Verify the player's rack contains the tiles being placed
         val rack = racks.getValue(player).toMutableList()
         for ((_, tile) in placements) {
             val idx = if (tile.isBlank) rack.indexOfFirst { it.isBlank }
@@ -101,7 +100,8 @@ class GameEngine(
         if (player != currentPlayer) return TurnActionResult.Failure("Not your turn")
 
         consecutiveScoelessTurns++
-        if (consecutiveScoelessTurns >= 6) {
+        val threshold = 6 * (playerCount - 1)
+        if (consecutiveScoelessTurns >= threshold) {
             finishGame(EndReason.CONSECUTIVE_SCORELESS_TURNS, playerWentOut = null)
         } else {
             switchPlayer()
@@ -129,7 +129,8 @@ class GameEngine(
         racks[player] = rack
 
         consecutiveScoelessTurns++
-        if (consecutiveScoelessTurns >= 6) {
+        val threshold = 6 * (playerCount - 1)
+        if (consecutiveScoelessTurns >= threshold) {
             finishGame(EndReason.CONSECUTIVE_SCORELESS_TURNS, playerWentOut = null)
         } else {
             switchPlayer()
@@ -150,8 +151,13 @@ class GameEngine(
         phase = GamePhase.FINISHED
 
         if (reason == EndReason.RESIGNATION && resignee != null) {
+            val winner = if (playerCount == 2) {
+                if (resignee == players[0]) players[1] else players[0]
+            } else {
+                players.first { it != resignee }
+            }
             val result = GameResult(
-                winner = opponent(resignee),
+                winner = winner,
                 finalScores = scores.toMap(),
                 reason = reason
             )
@@ -160,23 +166,20 @@ class GameEngine(
         }
 
         if (playerWentOut != null) {
-            val opp = opponent(playerWentOut)
-            val oppTileValue = racks.getValue(opp).sumOf { it.points }
-            scores[playerWentOut] = scores.getValue(playerWentOut) + oppTileValue
-            scores[opp] = scores.getValue(opp) - oppTileValue
+            val otherPlayers = Player.others(players, playerWentOut)
+            val totalTileValue = otherPlayers.sumOf { racks.getValue(it).sumOf { t -> t.points } }
+            scores[playerWentOut] = scores.getValue(playerWentOut) + totalTileValue
+            otherPlayers.forEach { p ->
+                scores[p] = scores.getValue(p) - racks.getValue(p).sumOf { t -> t.points }
+            }
         } else {
-            Player.entries.forEach { p ->
+            players.forEach { p ->
                 scores[p] = scores.getValue(p) - racks.getValue(p).sumOf { it.points }
             }
         }
 
-        val s1 = scores.getValue(Player.ONE)
-        val s2 = scores.getValue(Player.TWO)
-        val winner = when {
-            s1 > s2 -> Player.ONE
-            s2 > s1 -> Player.TWO
-            else -> null
-        }
+        val sorted = players.sortedByDescending { scores.getValue(it) }
+        val winner = if (scores.getValue(sorted[0]) > scores.getValue(sorted[1])) sorted[0] else null
 
         val result = GameResult(winner = winner, finalScores = scores.toMap(), reason = reason)
         gameResult = result
@@ -184,8 +187,8 @@ class GameEngine(
     }
 
     private fun switchPlayer() {
-        currentPlayer = opponent(currentPlayer)
+        currentPlayer = Player.cycle(players, currentPlayer)
     }
 
-    fun opponent(player: Player): Player = if (player == Player.ONE) Player.TWO else Player.ONE
+    fun opponent(player: Player): Player = Player.cycle(players, player)
 }

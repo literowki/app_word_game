@@ -20,8 +20,17 @@ class TileBag(tiles: List<Tile>, private val random: Random = Random.Default) {
         _tiles.shuffle(random)
     }
 
+    fun toList(): List<Tile> = _tiles.toList()
+
+    fun clear() { _tiles.clear() }
+
+    fun addDirectly(tile: Tile) { _tiles.add(tile) }
+
+    fun shuffle(random: Random) { _tiles.shuffle(random) }
+
     companion object {
-        // Polish Scrabble (Literaki) official distribution
+        fun fromTiles(tiles: List<Tile>, random: Random = Random.Default): TileBag = TileBag(tiles.toMutableList(), random)
+
         fun standard(random: Random = Random.Default): TileBag {
             val tiles = mutableListOf<Tile>().apply {
                 addTiles('A', 1, 9)

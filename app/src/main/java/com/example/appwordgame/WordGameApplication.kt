@@ -3,6 +3,7 @@ package com.example.appwordgame
 import android.app.Application
 import com.example.appwordgame.game.AssetDictionary
 import com.example.appwordgame.game.Dictionary
+import com.example.appwordgame.network.GameSessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,8 +19,15 @@ class WordGameApplication : Application() {
 
     private val _dictionary = MutableStateFlow<Dictionary?>(null)
 
-    // Emits null while loading, non-null once the word list is ready.
     val dictionary: StateFlow<Dictionary?> = _dictionary.asStateFlow()
+
+    var gameSessionManager: GameSessionManager? = null
+        private set
+
+    fun setGameSessionManager(manager: GameSessionManager?) {
+        gameSessionManager?.close()
+        gameSessionManager = manager
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -30,6 +38,7 @@ class WordGameApplication : Application() {
 
     override fun onTerminate() {
         super.onTerminate()
+        gameSessionManager?.close()
         scope.cancel()
     }
 }

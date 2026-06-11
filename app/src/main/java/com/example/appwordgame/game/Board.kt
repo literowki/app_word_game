@@ -12,6 +12,7 @@ class Board {
     fun place(pos: Position, tile: Tile) { cells[pos] = tile }
     fun isEmpty(): Boolean = cells.isEmpty()
     fun allTiles(): Map<Position, Tile> = cells.toMap()
+    fun restoreFrom(tiles: Map<Position, Tile>) { cells.putAll(tiles) }
 
     fun premiumAt(pos: Position): PremiumSquare = PREMIUM_MAP[pos] ?: PremiumSquare.NONE
 

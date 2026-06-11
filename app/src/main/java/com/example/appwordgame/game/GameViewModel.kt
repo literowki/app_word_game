@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.appwordgame.WordGameApplication
+import com.example.appwordgame.network.SerializedGameState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,20 +21,46 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private var engine: GameEngine? = null
 
-    // Tiles placed on the board that haven't been submitted yet.
-    // Parallel lists: pendingPositions[i] and pendingTiles[i] go together.
     private val pendingPositions = mutableListOf<Position>()
     private val pendingTiles = mutableListOf<Tile>()
+
+    private var initialStateLoaded = false
 
     init {
         viewModelScope.launch {
             val dict = wordGameApp.dictionary.filterNotNull().first()
-            engine = GameEngine(dict)
-            refreshState()
+            if (!initialStateLoaded) {
+                engine = GameEngine(dict)
+                refreshState()
+            }
         }
     }
 
-    // ── Rack interaction ──────────────────────────────────────────────────────
+    fun loadFromSerializedState(
+        json: String,
+        playerNicknames: Map<Int, String> = emptyMap(),
+        localPlayerIndex: Int = 0,
+    ) {
+        if (initialStateLoaded) return
+        initialStateLoaded = true
+        viewModelScope.launch {
+            val dict = wordGameApp.dictionary.filterNotNull().first()
+            val gameState = SerializedGameState.fromJson(json)
+            engine = gameState.toGameEngine(dict)
+            val activePlayers = Player.activePlayers(gameState.playerCount)
+            val nicknameMap = mutableMapOf<Player, String>()
+            gameState.playerNicknames.forEachIndexed { index, name ->
+                activePlayers.getOrNull(index)?.let { nicknameMap[it] = name }
+            }
+            _uiState.value = _uiState.value.copy(
+                dictionaryLoading = false,
+                playerNicknames = nicknameMap,
+                localPlayerIndex = localPlayerIndex,
+                playerCount = gameState.playerCount,
+            )
+            refreshState()
+        }
+    }
 
     fun onRackTileTapped(index: Int) {
         val state = _uiState.value
@@ -42,13 +69,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = state.copy(selectedRackIndex = newSelected, moveError = null)
     }
 
-    // ── Board interaction ─────────────────────────────────────────────────────
-
     fun onBoardCellTapped(pos: Position) {
         val state = _uiState.value
         if (state.phase != GamePhase.PLAYING || state.dictionaryLoading) return
 
-        // Tap on a pending tile: recall it to rack
         val pendingIdx = pendingPositions.indexOf(pos)
         if (pendingIdx != -1) {
             pendingPositions.removeAt(pendingIdx)
@@ -57,9 +81,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Tap on empty cell with a tile selected: place it
         val selectedIdx = state.selectedRackIndex ?: return
-        if (state.boardTiles.containsKey(pos)) return  // occupied by committed tile
+        if (state.boardTiles.containsKey(pos)) return
         val tile = state.currentRack.getOrNull(selectedIdx) ?: return
 
         if (tile.isBlank && tile.letter == ' ') {
@@ -87,8 +110,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             moveError = null
         )
     }
-
-    // ── Actions ───────────────────────────────────────────────────────────────
 
     fun onSubmit() {
         val eng = engine ?: return
@@ -142,6 +163,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onNewGame() {
+        initialStateLoaded = false
+        engine = null
         viewModelScope.launch {
             val dict = wordGameApp.dictionary.filterNotNull().first()
             engine = GameEngine(dict)
@@ -150,8 +173,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             refreshState()
         }
     }
-
-    // ── Exchange ──────────────────────────────────────────────────────────────
 
     fun onExchangeOpen() {
         _uiState.value = _uiState.value.copy(
@@ -196,8 +217,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = _uiState.value.copy(showExchangeDialog = false, exchangeSelectedIndices = emptySet())
     }
 
-    // ── State builder ─────────────────────────────────────────────────────────
-
     private fun refreshState(
         clearSelection: Boolean = false,
         lastWords: List<String> = emptyList(),
@@ -238,6 +257,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             moveError = null,
             lastMoveWords = lastWords,
             lastMoveScore = lastScore,
+            playerNicknames = prev.playerNicknames,
+            localPlayerIndex = prev.localPlayerIndex,
+            playerCount = eng.playerCount,
         )
     }
 }
