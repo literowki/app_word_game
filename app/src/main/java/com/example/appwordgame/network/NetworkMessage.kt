@@ -19,6 +19,8 @@ enum class MessageType {
     PLAYER_INFO,
     START_GAME,
     GAME_MOVE,
+    GAME_ACTION,
+    GAME_STATE_UPDATE,
     ERROR,
 }
 

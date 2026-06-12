@@ -182,10 +182,10 @@ private fun AppNavigation() {
 
         composable("game") {
             val sessionManager = app.gameSessionManager
-            // Properly observe the state so Compose knows to recompose when it changes
-            val sessionState by sessionManager?.state?.collectAsState() ?: remember { mutableStateOf(null) }
+            val sessionState by sessionManager?.state?.collectAsState()
+                ?: remember { mutableStateOf(null) }
             val initialState = sessionState?.gameStateJson
-            val players = sessionManager?.state?.value?.players ?: emptyList()
+            val players = sessionState?.players ?: emptyList()
             val nicknames = players.mapIndexed { idx, info -> idx to info.nickname }.toMap()
             val localIdx = if (sessionManager?.isHost == true) 0 else 1
 
@@ -194,9 +194,12 @@ private fun AppNavigation() {
             }
 
             GameScreen(
+                sessionManager = sessionManager,
                 initialState = initialState,
                 playerNicknames = nicknames,
                 localPlayerIndex = localIdx,
+                isHost = sessionManager?.isHost ?: false,
+                playerCount = players.size.coerceIn(2, 4),
             )
         }
     }

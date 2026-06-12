@@ -20,4 +20,6 @@ data class GameUiState(
     val playerNicknames: Map<Player, String> = emptyMap(),
     val localPlayerIndex: Int = 0,
     val playerCount: Int = 2,
+    val isMyTurn: Boolean = true,
+    val connectionError: String? = null,
 )

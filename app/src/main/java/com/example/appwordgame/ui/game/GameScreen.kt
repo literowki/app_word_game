@@ -1,6 +1,7 @@
 package com.example.appwordgame.ui.game
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -22,16 +24,37 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.appwordgame.game.GamePhase
 import com.example.appwordgame.game.GameViewModel
+import com.example.appwordgame.game.Player
+import com.example.appwordgame.network.GameSessionManager
 
 @Composable
 fun GameScreen(
     modifier: Modifier = Modifier,
+    sessionManager: GameSessionManager? = null,
     initialState: String? = null,
     playerNicknames: Map<Int, String> = emptyMap(),
     localPlayerIndex: Int = 0,
+    isHost: Boolean = false,
+    playerCount: Int = 2,
 ) {
     val vm: GameViewModel = viewModel()
     val state by vm.uiState.collectAsState()
+
+    LaunchedEffect(sessionManager) {
+        if (sessionManager != null) {
+            val players = sessionManager.state.value.players
+            val nicknames = players.mapIndexed { idx, info -> Pair(Player.activePlayers(playerCount).getOrNull(idx), info.nickname) }
+                .filter { it.first != null }
+                .associate { it.first!! to it.second }
+            vm.initMultiplayer(
+                sessionManager = sessionManager,
+                isHost = isHost,
+                localPlayerIndex = localPlayerIndex,
+                playerNicknamesMap = nicknames,
+                playerCount = playerCount,
+            )
+        }
+    }
 
     if (initialState != null && state.dictionaryLoading) {
         vm.loadFromSerializedState(initialState, playerNicknames, localPlayerIndex)
@@ -60,6 +83,22 @@ fun GameScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.navigationBars)
             ) {
+                if (state.connectionError != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFB71C1C))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = state.connectionError ?: "",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+
                 ScoreBar(
                     state = state,
                     onResign = vm::onResign,

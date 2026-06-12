@@ -1,5 +1,6 @@
 package com.example.appwordgame.game
 
+import com.example.appwordgame.network.SerializedGameState
 import kotlin.random.Random
 
 enum class GamePhase { PLAYING, FINISHED }
@@ -191,4 +192,29 @@ class GameEngine(
     }
 
     fun opponent(player: Player): Player = Player.cycle(players, player)
+
+    fun applySnapshot(state: SerializedGameState) {
+        board.restoreFrom(state.board.mapKeys { (key, _) ->
+            val parts = key.removeSurrounding("(", ")").split(",")
+            Position(parts[0].trim().toInt(), parts[1].trim().toInt())
+        }.mapValues { (_, st) -> st.toTile() })
+        bag.clear()
+        state.bag.map { it.toTile() }.forEach { bag.addDirectly(it) }
+        players.forEachIndexed { index, player ->
+            racks[player] = state.racks.getOrNull(index)?.map { it.toTile() }?.toMutableList() ?: mutableListOf()
+            scores[player] = state.scores.getOrNull(index) ?: 0
+        }
+        currentPlayer = players.getOrNull(state.currentPlayerIndex) ?: players.first()
+        consecutiveScoelessTurns = 0
+        phase = if (state.phase == "FINISHED") GamePhase.FINISHED else GamePhase.PLAYING
+        if (state.winnerIndex != null && state.endReason != null) {
+            gameResult = GameResult(
+                winner = players.getOrNull(state.winnerIndex),
+                finalScores = players.associateWith { scores[it] ?: 0 },
+                reason = EndReason.valueOf(state.endReason),
+            )
+        } else {
+            gameResult = null
+        }
+    }
 }

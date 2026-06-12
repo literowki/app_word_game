@@ -1,12 +1,13 @@
 package com.example.appwordgame.network
 
-import com.example.appwordgame.game.Board
 import com.example.appwordgame.game.Dictionary
+import com.example.appwordgame.game.EndReason
 import com.example.appwordgame.game.GameEngine
+import com.example.appwordgame.game.GamePhase
+import com.example.appwordgame.game.GameResult
 import com.example.appwordgame.game.Player
 import com.example.appwordgame.game.Position
 import com.example.appwordgame.game.Tile
-import com.example.appwordgame.game.TileBag
 import kotlin.random.Random
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -42,12 +43,14 @@ data class SerializedGameState(
     val racks: List<List<SerializedTile>>,
     val bag: List<SerializedTile>,
     val board: Map<String, SerializedTile>,
+    val phase: String = "PLAYING",
+    val winnerIndex: Int? = null,
+    val endReason: String? = null,
 ) {
     fun toGameEngine(dictionary: Dictionary, random: Random = Random.Default): GameEngine {
         val engine = GameEngine(dictionary, playerCount = playerCount, random = random)
         engine.bag.clear()
         bag.map { it.toTile() }.forEach { tile -> engine.bag.addDirectly(tile) }
-        engine.bag.shuffle(random)
         val activePlayers = Player.activePlayers(playerCount)
         activePlayers.forEachIndexed { index, player ->
             engine.racks[player] = racks.getOrNull(index)?.map { it.toTile() }?.toMutableList()
@@ -62,6 +65,15 @@ data class SerializedGameState(
             }
         }
         engine.currentPlayer = activePlayers.getOrNull(currentPlayerIndex) ?: activePlayers.first()
+        engine.phase = if (phase == "FINISHED") GamePhase.FINISHED else GamePhase.PLAYING
+        if (winnerIndex != null && endReason != null) {
+            val winner = activePlayers.getOrNull(winnerIndex)
+            engine.gameResult = GameResult(
+                winner = winner,
+                finalScores = activePlayers.associateWith { engine.scores[it] ?: 0 },
+                reason = EndReason.valueOf(endReason),
+            )
+        }
         return engine
     }
 
@@ -83,6 +95,9 @@ data class SerializedGameState(
                 bag = engine.bag.toList().map { SerializedTile.fromTile(it) },
                 board = engine.board.allTiles().mapKeys { (pos, _) -> pos.toString() }
                     .mapValues { (_, tile) -> SerializedTile.fromTile(tile) },
+                phase = engine.phase.name,
+                winnerIndex = engine.gameResult?.winner?.let { activePlayers.indexOf(it).takeIf { idx -> idx >= 0 } },
+                endReason = engine.gameResult?.reason?.name,
             )
         }
     }

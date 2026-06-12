@@ -4,13 +4,20 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.appwordgame.WordGameApplication
+import com.example.appwordgame.network.GameSessionManager
+import com.example.appwordgame.network.MessageType
+import com.example.appwordgame.network.NetworkMessage
 import com.example.appwordgame.network.SerializedGameState
+import com.example.appwordgame.network.SessionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -26,6 +33,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     private var initialStateLoaded = false
 
+    private var sessionManager: GameSessionManager? = null
+    private var isHost: Boolean = false
+    private var localPlayerIndex: Int = 0
+    private var isMultiplayer: Boolean = false
+    private var playerCount: Int = 2
+    private var playerNicknamesMap: Map<Player, String> = emptyMap()
+    private var subscribedToMessages = false
+
     init {
         viewModelScope.launch {
             val dict = wordGameApp.dictionary.filterNotNull().first()
@@ -34,6 +49,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 refreshState()
             }
         }
+    }
+
+    fun initMultiplayer(
+        sessionManager: GameSessionManager,
+        isHost: Boolean,
+        localPlayerIndex: Int,
+        playerNicknamesMap: Map<Player, String>,
+        playerCount: Int,
+    ) {
+        this.sessionManager = sessionManager
+        this.isHost = isHost
+        this.localPlayerIndex = localPlayerIndex
+        this.playerNicknamesMap = playerNicknamesMap
+        this.playerCount = playerCount
+        this.isMultiplayer = true
+        subscribeToMessages()
     }
 
     fun loadFromSerializedState(
@@ -62,16 +93,57 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun subscribeToMessages() {
+        if (subscribedToMessages) return
+        subscribedToMessages = true
+        viewModelScope.launch {
+            sessionManager?.messages?.collect { msg ->
+                when (msg.type) {
+                    MessageType.GAME_ACTION -> handleRemoteAction(msg)
+                    MessageType.GAME_STATE_UPDATE -> handleStateUpdate(msg)
+                    else -> {}
+                }
+            }
+        }
+        viewModelScope.launch {
+            sessionManager?.state?.collect { s ->
+                if (s.status == SessionStatus.ERROR || s.status == SessionStatus.DISCONNECTED) {
+                    _uiState.update { it.copy(connectionError = s.error ?: "Connection lost") }
+                } else if (s.status == SessionStatus.CONNECTED) {
+                    _uiState.update { it.copy(connectionError = null) }
+                }
+            }
+        }
+    }
+
+    // ── Turn check ─────────────────────────────────────────────────────────
+
+    private fun isLocalPlayersTurn(): Boolean {
+        val eng = engine ?: return true
+        val activePlayers = Player.activePlayers(eng.playerCount)
+        return eng.currentPlayer == activePlayers.getOrNull(localPlayerIndex)
+    }
+
+    private fun getRemotePlayerIndex(): Int = if (localPlayerIndex == 0) 1 else 0
+
+    private fun getActivePlayers(): List<Player> = Player.activePlayers(engine?.playerCount ?: playerCount)
+
+    // ── Rack interaction ──────────────────────────────────────────────────────
+
     fun onRackTileTapped(index: Int) {
         val state = _uiState.value
         if (state.phase != GamePhase.PLAYING || state.dictionaryLoading) return
+        if (isMultiplayer && !isLocalPlayersTurn()) return
         val newSelected = if (state.selectedRackIndex == index) null else index
         _uiState.value = state.copy(selectedRackIndex = newSelected, moveError = null)
     }
 
+    // ── Board interaction ─────────────────────────────────────────────────────
+
     fun onBoardCellTapped(pos: Position) {
         val state = _uiState.value
         if (state.phase != GamePhase.PLAYING || state.dictionaryLoading) return
+        if (isMultiplayer && !isLocalPlayersTurn()) return
 
         val pendingIdx = pendingPositions.indexOf(pos)
         if (pendingIdx != -1) {
@@ -111,56 +183,100 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    // ── Submit ────────────────────────────────────────────────────────────────
+
     fun onSubmit() {
         val eng = engine ?: return
         if (pendingPositions.isEmpty()) return
+        if (isMultiplayer && !isLocalPlayersTurn()) return
+
         val placements = pendingPositions.zip(pendingTiles)
-        when (val result = eng.playMove(eng.currentPlayer, placements)) {
-            is MoveResult.Success -> {
-                pendingPositions.clear()
-                pendingTiles.clear()
-                refreshState(
-                    lastWords = result.wordsFormed,
-                    lastScore = result.score,
-                    gameResult = result.gameResult
-                )
+
+        if (!isMultiplayer || isHost) {
+            when (val result = eng.playMove(eng.currentPlayer, placements)) {
+                is MoveResult.Success -> {
+                    pendingPositions.clear()
+                    pendingTiles.clear()
+                    if (isHost) {
+                        broadcastState(result.wordsFormed, result.score, result.gameResult)
+                    } else {
+                        refreshState(lastWords = result.wordsFormed, lastScore = result.score, gameResult = result.gameResult)
+                    }
+                }
+                is MoveResult.InvalidPlacement ->
+                    _uiState.value = _uiState.value.copy(moveError = result.reason)
+                is MoveResult.InvalidWords ->
+                    _uiState.value = _uiState.value.copy(
+                        moveError = "Nieznane słowa: ${result.invalidWords.joinToString()}"
+                    )
+                else -> {}
             }
-            is MoveResult.InvalidPlacement ->
-                _uiState.value = _uiState.value.copy(moveError = result.reason)
-            is MoveResult.InvalidWords ->
-                _uiState.value = _uiState.value.copy(
-                    moveError = "Nieznane słowa: ${result.invalidWords.joinToString()}"
-                )
-            else -> {}
+        } else {
+            val payload = buildSubmitAction(placements)
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", payload))
+            pendingPositions.clear()
+            pendingTiles.clear()
+            refreshState()
         }
     }
+
+    // ── Pass ──────────────────────────────────────────────────────────────────
 
     fun onPass() {
         val eng = engine ?: return
-        when (val r = eng.pass(eng.currentPlayer)) {
-            is TurnActionResult.Success -> {
-                pendingPositions.clear()
-                pendingTiles.clear()
-                refreshState()
+        if (isMultiplayer && !isLocalPlayersTurn()) return
+
+        if (!isMultiplayer || isHost) {
+            when (val r = eng.pass(eng.currentPlayer)) {
+                is TurnActionResult.Success -> {
+                    pendingPositions.clear()
+                    pendingTiles.clear()
+                    if (isHost) broadcastState() else refreshState()
+                }
+                is TurnActionResult.Failure ->
+                    _uiState.value = _uiState.value.copy(moveError = r.reason)
             }
-            is TurnActionResult.Failure ->
-                _uiState.value = _uiState.value.copy(moveError = r.reason)
+        } else {
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", """{"action":"PASS"}"""))
+            pendingPositions.clear()
+            pendingTiles.clear()
+            refreshState()
         }
     }
 
+    // ── Shuffle ───────────────────────────────────────────────────────────────
+
     fun onShuffleRack() {
+        if (isMultiplayer && !isLocalPlayersTurn()) return
         val eng = engine ?: return
         eng.racks[eng.currentPlayer]?.shuffle()
         refreshState()
     }
 
+    // ── Resign ────────────────────────────────────────────────────────────────
+
     fun onResign() {
         val eng = engine ?: return
-        val result = eng.resign(eng.currentPlayer)
-        pendingPositions.clear()
-        pendingTiles.clear()
-        refreshState(gameResult = result)
+        if (isMultiplayer && !isLocalPlayersTurn()) return
+
+        if (!isMultiplayer || isHost) {
+            val result = eng.resign(eng.currentPlayer)
+            pendingPositions.clear()
+            pendingTiles.clear()
+            if (isHost) {
+                broadcastState(gameResult = result)
+            } else {
+                refreshState(gameResult = result)
+            }
+        } else {
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", """{"action":"RESIGN"}"""))
+            pendingPositions.clear()
+            pendingTiles.clear()
+            refreshState()
+        }
     }
+
+    // ── New game ──────────────────────────────────────────────────────────────
 
     fun onNewGame() {
         initialStateLoaded = false
@@ -174,7 +290,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Exchange ──────────────────────────────────────────────────────────────
+
     fun onExchangeOpen() {
+        if (isMultiplayer && !isLocalPlayersTurn()) return
         _uiState.value = _uiState.value.copy(
             showExchangeDialog = true,
             exchangeSelectedIndices = emptySet(),
@@ -192,6 +311,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun onExchangeConfirm() {
         val eng = engine ?: return
         val state = _uiState.value
+        if (isMultiplayer && !isLocalPlayersTurn()) return
+
         val tilesToExchange = state.exchangeSelectedIndices
             .sorted()
             .mapNotNull { state.currentRack.getOrNull(it) }
@@ -199,23 +320,163 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             _uiState.value = state.copy(showExchangeDialog = false)
             return
         }
-        when (val r = eng.exchangeTiles(eng.currentPlayer, tilesToExchange)) {
-            is TurnActionResult.Success -> {
-                pendingPositions.clear()
-                pendingTiles.clear()
-                refreshState(clearExchange = true)
+
+        if (!isMultiplayer || isHost) {
+            when (val r = eng.exchangeTiles(eng.currentPlayer, tilesToExchange)) {
+                is TurnActionResult.Success -> {
+                    pendingPositions.clear()
+                    pendingTiles.clear()
+                    if (isHost) broadcastState() else refreshState(clearExchange = true)
+                }
+                is TurnActionResult.Failure ->
+                    _uiState.value = _uiState.value.copy(
+                        showExchangeDialog = false,
+                        moveError = r.reason
+                    )
             }
-            is TurnActionResult.Failure ->
-                _uiState.value = _uiState.value.copy(
-                    showExchangeDialog = false,
-                    moveError = r.reason
-                )
+        } else {
+            val tilesJson = buildExchangeAction(tilesToExchange)
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", tilesJson))
+            _uiState.value = _uiState.value.copy(showExchangeDialog = false)
+            refreshState()
         }
     }
 
     fun onExchangeCancel() {
         _uiState.value = _uiState.value.copy(showExchangeDialog = false, exchangeSelectedIndices = emptySet())
     }
+
+    // ── Network message handling ──────────────────────────────────────────────
+
+    private fun handleRemoteAction(msg: NetworkMessage) {
+        if (!isHost) return
+        val eng = engine ?: return
+        val payload = msg.payload ?: return
+        val json = runCatching { JSONObject(payload) }.getOrNull() ?: return
+        val action = json.optString("action")
+        val remotePlayer = getActivePlayers().getOrNull(getRemotePlayerIndex()) ?: return
+
+        when (action) {
+            "SUBMIT" -> {
+                val placements = parsePlacements(json.optJSONArray("placements")) ?: return
+                when (val result = eng.playMove(remotePlayer, placements)) {
+                    is MoveResult.Success -> {
+                        broadcastState(result.wordsFormed, result.score, result.gameResult)
+                    }
+                    is MoveResult.InvalidPlacement -> sendError(result.reason)
+                    is MoveResult.InvalidWords -> sendError("Nieznane słowa: ${result.invalidWords.joinToString()}")
+                    else -> {}
+                }
+            }
+            "PASS" -> {
+                eng.pass(remotePlayer)
+                broadcastState()
+            }
+            "EXCHANGE" -> {
+                val tiles = parseTiles(json.optJSONArray("tiles")) ?: return
+                eng.exchangeTiles(remotePlayer, tiles)
+                broadcastState()
+            }
+            "RESIGN" -> {
+                val result = eng.resign(remotePlayer)
+                broadcastState(gameResult = result)
+            }
+        }
+    }
+
+    private fun handleStateUpdate(msg: NetworkMessage) {
+        if (isHost) return
+        val payload = msg.payload ?: return
+        val eng = engine ?: return
+        try {
+            val state = SerializedGameState.fromJson(payload)
+            eng.applySnapshot(state)
+            pendingPositions.clear()
+            pendingTiles.clear()
+            refreshState()
+        } catch (_: Exception) {}
+    }
+
+    private fun broadcastState(
+        lastWords: List<String> = emptyList(),
+        lastScore: Int = 0,
+        gameResult: GameResult? = null,
+    ) {
+        val eng = engine ?: return
+        val serialized = SerializedGameState.fromGameEngine(eng, playerNicknamesMap)
+        sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_STATE_UPDATE, "", serialized.toJson()))
+        refreshState(lastWords = lastWords, lastScore = lastScore, gameResult = gameResult)
+    }
+
+    private fun sendError(message: String) {
+        sessionManager?.sendMessage(NetworkMessage(MessageType.ERROR, "", message))
+    }
+
+    // ── JSON helpers ──────────────────────────────────────────────────────────
+
+    private fun buildSubmitAction(placements: List<Pair<Position, Tile>>): String {
+        return JSONObject().apply {
+            put("action", "SUBMIT")
+            put("placements", JSONArray(placements.map { (pos, tile) ->
+                JSONObject().apply {
+                    put("row", pos.row)
+                    put("col", pos.col)
+                    put("letter", tile.letter.toString())
+                    put("points", tile.points)
+                    put("isBlank", tile.isBlank)
+                }
+            }))
+        }.toString()
+    }
+
+    private fun buildExchangeAction(tiles: List<Tile>): String {
+        return JSONObject().apply {
+            put("action", "EXCHANGE")
+            put("tiles", JSONArray(tiles.map { tile ->
+                JSONObject().apply {
+                    put("letter", tile.letter.toString())
+                    put("points", tile.points)
+                    put("isBlank", tile.isBlank)
+                }
+            }))
+        }.toString()
+    }
+
+    private fun parsePlacements(array: JSONArray?): List<Pair<Position, Tile>>? {
+        if (array == null) return null
+        val result = mutableListOf<Pair<Position, Tile>>()
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            val pos = Position(obj.getInt("row"), obj.getInt("col"))
+            val letter = obj.getString("letter")
+            if (letter.isEmpty()) return null
+            val tile = Tile(
+                letter = letter[0],
+                points = obj.getInt("points"),
+                isBlank = obj.optBoolean("isBlank"),
+            )
+            result.add(pos to tile)
+        }
+        return result
+    }
+
+    private fun parseTiles(array: JSONArray?): List<Tile>? {
+        if (array == null) return null
+        val result = mutableListOf<Tile>()
+        for (i in 0 until array.length()) {
+            val obj = array.getJSONObject(i)
+            val letter = obj.getString("letter")
+            if (letter.isEmpty()) return null
+            result.add(Tile(
+                letter = letter[0],
+                points = obj.getInt("points"),
+                isBlank = obj.optBoolean("isBlank"),
+            ))
+        }
+        return result
+    }
+
+    // ── State builder ─────────────────────────────────────────────────────────
 
     private fun refreshState(
         clearSelection: Boolean = false,
@@ -240,6 +501,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        val activePlayers = Player.activePlayers(eng.playerCount)
+        val localPlayer = activePlayers.getOrNull(localPlayerIndex)
+        val isMyTurn = localPlayer != null && eng.currentPlayer == localPlayer
+
         val prev = _uiState.value
         _uiState.value = GameUiState(
             dictionaryLoading = false,
@@ -257,9 +522,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             moveError = null,
             lastMoveWords = lastWords,
             lastMoveScore = lastScore,
-            playerNicknames = prev.playerNicknames,
-            localPlayerIndex = prev.localPlayerIndex,
+            playerNicknames = if (playerNicknamesMap.isNotEmpty()) playerNicknamesMap else prev.playerNicknames,
+            localPlayerIndex = localPlayerIndex,
             playerCount = eng.playerCount,
+            isMyTurn = isMyTurn,
+            connectionError = prev.connectionError,
         )
     }
 }

@@ -258,6 +258,7 @@ fun ActionBar(
 ) {
     val hasPending = state.pendingPlacements.isNotEmpty()
     val canExchange = state.bagRemaining >= 7
+    val myTurn = state.isMyTurn
 
     Column(
         modifier = modifier
@@ -266,6 +267,18 @@ fun ActionBar(
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
+        if (!myTurn) {
+            val currentPlayerName = state.playerNicknames[state.currentPlayer]
+                ?: "Gracz ${state.currentPlayer.ordinal + 1}"
+            Text(
+                text = "Czekanie na $currentPlayerName…",
+                color = Color(0xFF9CB2CC),
+                fontSize = 13.sp,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+        }
+
         if (state.moveError != null) {
             Text(
                 text = state.moveError,
@@ -278,7 +291,7 @@ fun ActionBar(
 
         Button(
             onClick = onSubmit,
-            enabled = hasPending,
+            enabled = hasPending && myTurn,
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1A6B3A))
         ) { Text("Zatwierdź", fontSize = 13.sp) }
@@ -289,18 +302,19 @@ fun ActionBar(
         ) {
             OutlinedButton(
                 onClick = onShuffle,
+                enabled = myTurn,
                 modifier = Modifier.weight(1f)
             ) { Text("Tasuj", fontSize = 13.sp) }
 
             OutlinedButton(
                 onClick = onPass,
-                enabled = !hasPending,
+                enabled = !hasPending && myTurn,
                 modifier = Modifier.weight(1f)
             ) { Text("Pas", fontSize = 13.sp) }
 
             OutlinedButton(
                 onClick = onExchange,
-                enabled = !hasPending && canExchange,
+                enabled = !hasPending && canExchange && myTurn,
                 modifier = Modifier.weight(1f)
             ) { Text("Wymień", fontSize = 13.sp) }
         }
