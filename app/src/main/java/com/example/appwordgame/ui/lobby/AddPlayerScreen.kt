@@ -1,10 +1,12 @@
 package com.example.appwordgame.ui.lobby
 
+import android.content.Intent
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -104,6 +106,8 @@ fun AddPlayerScreen(
                 }
 
                 AddPlayerStep.WAITING_FOR_ANSWER -> {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+
                     Text(
                         "Share this invitation string with the other player:",
                         color = Color(0xFF9CB2CC),
@@ -120,13 +124,35 @@ fun AddPlayerScreen(
                             modifier = Modifier.padding(12.dp),
                         )
                     }
-                    Button(
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(state.invitationString))
-                        },
+
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Copy invitation")
+                        OutlinedButton(
+                            onClick = {
+                                clipboardManager.setText((AnnotatedString(state.invitationString)))
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Copy invitation")
+                        }
+
+                        Button(
+                            onClick = {
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    //putExtra(Intent.EXTRA_TEXT, "Hey! Join my literówki game. Here's my invitation code:\n\n${state.invitationString}")
+                                    type = "text/plain"
+                                }
+
+                                val shareIntent = Intent.createChooser(sendIntent, "Share Invitation Code")
+                                context.startActivity(shareIntent)
+                            },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text("Share")
+                        }
                     }
 
                     Spacer(Modifier.height(8.dp))
