@@ -28,11 +28,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.appwordgame.network.PlayerInfo
+import com.google.android.gms.nearby.Nearby
+import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
+import com.google.android.gms.nearby.connection.ConnectionResolution
+import com.google.android.gms.nearby.connection.DiscoveryOptions
+import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
+import com.google.android.gms.nearby.connection.Payload
+import com.google.android.gms.nearby.connection.PayloadCallback
+import com.google.android.gms.nearby.connection.Strategy
+import com.google.android.gms.nearby.connection.PayloadTransferUpdate
+import com.google.android.gms.nearby.connection.ConnectionInfo
+import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
 import kotlinx.coroutines.launch
 
 @Composable
@@ -42,6 +54,8 @@ fun JoinGameScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+
     val state by viewModel.state.collectAsState()
     @Suppress("DEPRECATION")
     val clipboardManager = LocalClipboardManager.current
@@ -88,11 +102,71 @@ fun JoinGameScreen(
                         modifier = Modifier.fillMaxWidth().height(150.dp),
                         shape = RoundedCornerShape(12.dp),
                     )
+
                     Button(
                         onClick = {
-                            if (state.nickname.isNotBlank() && state.invitationString.isNotBlank()) {
+                            if (state.nickname.isNotBlank()) {
                                 viewModel.onGenerating()
-                                scope.launch {
+
+                                Nearby.getConnectionsClient(context).startDiscovery(
+                                    "com.example.appwordgame",
+                                    object : EndpointDiscoveryCallback() {
+                                        override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+                                            // host found, connect automatically
+                                            Nearby.getConnectionsClient(context).requestConnection(
+                                                state.nickname.trim(),
+                                                endpointId,
+                                                object: ConnectionLifecycleCallback() {
+                                                    override fun onConnectionInitiated(hostId: String, cInfo: ConnectionInfo) {
+                                                        // accept BT connection
+                                                        Nearby.getConnectionsClient(context).acceptConnection(hostId, object: PayloadCallback() {
+                                                            override fun onPayloadReceived(id: String, payload: Payload) {
+                                                                val receivedInvitation = String(payload.asBytes()!!)
+
+                                                                viewModel.onInvitationChanged(receivedInvitation)
+
+                                                                scope.launch {
+                                                                    try {
+                                                                        val answer = onGenerateAnswer(
+                                                                            state.nickname.trim(),
+                                                                            receivedInvitation.trim()
+                                                                        )
+                                                                        viewModel.onAnswerGenerated(answer)
+
+                                                                        // answer
+                                                                        val responsePayload = Payload.fromBytes(answer.toByteArray())
+                                                                        Nearby.getConnectionsClient(context).sendPayload(hostId, responsePayload)
+
+                                                                        // off BT -> WebRTC goes further
+                                                                        Nearby.getConnectionsClient(context).stopDiscovery()
+
+                                                                    } catch (e: Exception) {
+                                                                        viewModel.onError(e.message ?: "Failed")
+                                                                    }
+                                                                }
+                                                            }
+                                                            override fun onPayloadTransferUpdate(p0: String, p1: PayloadTransferUpdate) {}
+                                                        })
+                                                    }
+
+                                                    override fun onConnectionResult(
+                                                        p0: String,
+                                                        p1: ConnectionResolution
+                                                    ) {}
+
+                                                    override fun onDisconnected(p0: String) {}
+                                                }
+                                            )
+                                        }
+
+                                        override fun onEndpointLost(endpointId: String) {}
+                                    },
+                                    DiscoveryOptions.Builder().setStrategy(Strategy.P2P_STAR).build()
+                                )
+                            }
+                        },
+                        /*
+                        scope.launch {
                                     try {
                                         val answer = onGenerateAnswer(
                                             state.nickname.trim(),
@@ -103,13 +177,12 @@ fun JoinGameScreen(
                                         viewModel.onError(e.message ?: "Failed")
                                     }
                                 }
-                            }
-                        },
-                        enabled = state.nickname.isNotBlank() && state.invitationString.isNotBlank() && !state.isLoading,
+                         */
+                        enabled = state.nickname.isNotBlank() && !state.isLoading,
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                     ) {
-                        Text("Generate answer")
+                        Text("search & join game")
                     }
                 }
 
