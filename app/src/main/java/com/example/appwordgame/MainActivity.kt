@@ -187,7 +187,13 @@ private fun AppNavigation() {
             val initialState = sessionState?.gameStateJson
             val players = sessionState?.players ?: emptyList()
             val nicknames = players.mapIndexed { idx, info -> idx to info.nickname }.toMap()
-            val localIdx = if (sessionManager?.isHost == true) 0 else 1 // a co z dwoma pozostałymi graczami?
+            val localIdx = if (sessionManager?.isHost == true) {
+                0
+            } else {
+                val myNickname = sessionManager?.localNickname
+                val foundIdx = players.indexOfFirst { it.nickname == myNickname }
+                if (foundIdx >= 0) foundIdx else 1
+            }
 
             DisposableEffect(Unit) {
                 onDispose { app.setGameSessionManager(null) }
