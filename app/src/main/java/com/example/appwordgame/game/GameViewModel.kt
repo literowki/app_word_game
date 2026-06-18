@@ -492,7 +492,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val pendingMap = pendingPositions.zip(pendingTiles).toMap()
         val usedTiles = pendingTiles.toMutableList()
-        val fullRack = eng.racks[eng.currentPlayer]?.toMutableList() ?: mutableListOf()
+
+        val activePlayers = Player.activePlayers(eng.playerCount)
+        val localPlayer = activePlayers.getOrNull(localPlayerIndex)
+        val isMyTurn = localPlayer != null && eng.currentPlayer == localPlayer
+
+        val fullRack = if (localPlayer != null) {
+            eng.racks[localPlayer]?.toMutableList() ?: mutableListOf()
+        } else {
+            mutableListOf()
+        }
         val effectiveRack = fullRack.toMutableList().also { rack ->
             usedTiles.forEach { used ->
                 val idx = if (used.isBlank) rack.indexOfFirst { it.isBlank }
@@ -501,9 +510,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val activePlayers = Player.activePlayers(eng.playerCount)
-        val localPlayer = activePlayers.getOrNull(localPlayerIndex)
-        val isMyTurn = localPlayer != null && eng.currentPlayer == localPlayer
+
 
         val prev = _uiState.value
         _uiState.value = GameUiState(
