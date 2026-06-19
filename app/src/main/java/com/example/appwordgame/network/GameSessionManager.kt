@@ -1,6 +1,7 @@
 package com.example.appwordgame.network
 
 import android.content.Context
+import android.provider.ContactsContract
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ import org.webrtc.SessionDescription
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 enum class SessionStatus {
@@ -62,12 +64,18 @@ class GameSessionManager(
 ) : Closeable {
 
     private val appContext = context.applicationContext
-    private val localPeerId = generatePeerId()
+    val localPeerId = generatePeerId()
 
-    private var peerConnection: PeerConnection? = null
-    private var dataChannel: DataChannel? = null
+    // --- ARCHITEKTURA HUB (MULTI-PEER) ---
+    private val activePeerConnections = ConcurrentHashMap<String, PeerConnection>()
+    private val activeDataChannels = ConcurrentHashMap<String, DataChannel>()
+
+    private var pendingPeerConnection: PeerConnection? = null
+    private var pendingDataChannel: DataChannel? = null
+    //
     private var remotePeerId: String? = null
     private var remoteNickname: String? = null
+    //
     private val collectedCandidates = mutableListOf<IceCandidate>()
     private val pendingRemoteCandidates = mutableListOf<IceCandidate>()
     private var gatheringDeferred: CompletableDeferred<Unit>? = null
@@ -94,21 +102,27 @@ class GameSessionManager(
                 .createInitializationOptions()
         )
         peerConnectionFactory = PeerConnectionFactory.builder().createPeerConnectionFactory()
+
+        _state.update {
+            it.copy(players = listOf(PlayerInfo(localPeerId, localNickname, true)))
+        }
     }
 
     suspend fun generateInvitation(): String {
         updateStatus(SessionStatus.GENERATING_INVITATION)
         val connection = createPeerConnection()
-        peerConnection = connection
-        Log.d("GameSessionManager", "Connection created")
+        pendingPeerConnection = connection
+        Log.d("GameSessionManager", "Connection created for a new client")
+
         val channel = connection.createDataChannel("game", DataChannel.Init())
         Log.d("GameSessionManager", "Data channel created")
-        attachDataChannel(channel)
+        attachDataChannel(channel, isPending = true)
         Log.d("GameSessionManager", "Data channel attached")
 
         val offer = connection.createOfferAsync()
         connection.setLocalDescriptionAsync(offer)
         waitForIceGathering()
+
         val combined = buildCombinedString(offer)
         _state.update { curr ->
             val nextStatus = if (curr.status.ordinal < SessionStatus.WAITING_FOR_ANSWER.ordinal) {
@@ -130,7 +144,9 @@ class GameSessionManager(
                 SessionDescription.Type.ANSWER,
                 sdpObj.getString("sdp")
             )
-            peerConnection?.setRemoteDescriptionAsync(sdp)
+
+            pendingPeerConnection?.setRemoteDescriptionAsync(sdp)
+
             val iceArray = json.optJSONArray("ice") ?: JSONArray()
             for (i in 0 until iceArray.length()) {
                 val iceJson = iceArray.getJSONObject(i)
@@ -141,7 +157,7 @@ class GameSessionManager(
                 )
                 pendingRemoteCandidates.add(candidate)
             }
-            flushPendingCandidates()
+            flushPendingCandidates(pendingPeerConnection)
             true
         } catch (e: Exception) {
             _state.update { it.copy(error = "Failed to apply answer: ${e.message}", status = SessionStatus.ERROR) }
@@ -155,8 +171,9 @@ class GameSessionManager(
             val json = JSONObject(inviteJson)
             val sdpObj = json.getJSONObject("sdp")
             val sdp = SessionDescription(SessionDescription.Type.OFFER, sdpObj.getString("sdp"))
+
             val connection = createPeerConnection()
-            peerConnection = connection
+            pendingPeerConnection = connection
             connection.setRemoteDescriptionAsync(sdp)
 
             val iceArray = json.optJSONArray("ice") ?: JSONArray()
@@ -169,11 +186,12 @@ class GameSessionManager(
                 )
                 pendingRemoteCandidates.add(candidate)
             }
-            flushPendingCandidates()
+            flushPendingCandidates(connection)
 
             val answer = connection.createAnswerAsync()
             connection.setLocalDescriptionAsync(answer)
             waitForIceGathering()
+
             val combined = buildCombinedString(answer)
             _state.update { curr ->
                 val nextStatus = if (curr.status.ordinal < SessionStatus.CONNECTING.ordinal) {
@@ -190,9 +208,8 @@ class GameSessionManager(
         }
     }
 
+    // BROADCASTING
     fun sendMessage(message: NetworkMessage) {
-        val dc = dataChannel
-        if (dc == null || dc.state() != DataChannel.State.OPEN) return
         val json = JSONObject().apply {
             put("type", "game-msg")
             put("msgType", message.type.name)
@@ -200,7 +217,13 @@ class GameSessionManager(
             message.payload?.let { put("payload", it) }
         }
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
-        dc.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
+
+        activeDataChannels.forEach { (peerId, dc) ->
+            if (dc.state() == DataChannel.State.OPEN) {
+                dc.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
+                Log.d("GameSessionManager", "Sent message ${message.type} to peer: $peerId")
+            }
+        }
     }
 
     fun startGame(gameStateJson: String) {
@@ -211,8 +234,10 @@ class GameSessionManager(
     }
 
     override fun close() {
-        dataChannel?.close()
-        peerConnection?.close()
+        activeDataChannels.values.forEach { it.close() }
+        activePeerConnections.values.forEach { it.close() }
+        pendingDataChannel?.close()
+        pendingPeerConnection?.close()
         scope.cancel()
         peerConnectionFactory.dispose()
     }
@@ -220,6 +245,8 @@ class GameSessionManager(
     private fun createPeerConnection(): PeerConnection {
         gatheringDeferred = CompletableDeferred()
         collectedCandidates.clear()
+
+        var connectionRef: PeerConnection? = null
         
         val connection = requireNotNull(
             peerConnectionFactory.createPeerConnection(
@@ -231,43 +258,13 @@ class GameSessionManager(
                         Log.d("GameSessionManager", "ICE Connection State: $newState")
                         when (newState) {
                             PeerConnection.IceConnectionState.CONNECTED -> {
-                                if (isHost) {
-                                    _state.update { state ->
-                                        state.copy(
-                                            players = state.players.map { it.copy(isConnected = true) },
-                                            status = SessionStatus.CONNECTED,
-                                            error = null,
-                                        )
-                                    }
-                                    sendMessage(NetworkMessage(MessageType.PLAYER_RECONNECT, localPeerId))
+                                if (_state.value.status.ordinal < SessionStatus.CONNECTED.ordinal) {
+                                    updateStatus(SessionStatus.CONNECTED)
                                 }
                             }
-                            PeerConnection.IceConnectionState.DISCONNECTED -> {
-                                if (isHost) {
-                                    _state.update { state ->
-                                        state.copy(
-                                            players = state.players.map { it.copy(isConnected = false) },
-                                            status = SessionStatus.DISCONNECTED,
-                                            error = "Player disconnected",
-                                        )
-                                    }
-                                    sendMessage(NetworkMessage(MessageType.PLAYER_DISCONNECT, localPeerId))
-                                } else {
-                                    _state.update {
-                                        it.copy(
-                                            status = SessionStatus.ERROR,
-                                            error = "Host disconnected",
-                                        )
-                                    }
-                                }
-                            }
+                            PeerConnection.IceConnectionState.DISCONNECTED,
                             PeerConnection.IceConnectionState.FAILED -> {
-                                _state.update {
-                                    it.copy(
-                                        error = "Connection failed",
-                                        status = SessionStatus.ERROR,
-                                    )
-                                }
+                                handleDisconnectForConnection(connectionRef)
                             }
                             else -> Unit
                         }
@@ -283,9 +280,7 @@ class GameSessionManager(
                     }
 
                     override fun onIceCandidate(candidate: IceCandidate?) {
-                        if (candidate != null) {
-                            collectedCandidates.add(candidate)
-                        }
+                        candidate?.let { collectedCandidates.add(it) }
                     }
 
                     override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>?) = Unit
@@ -294,7 +289,7 @@ class GameSessionManager(
 
                     override fun onDataChannel(channel: DataChannel?) {
                         Log.d("GameSessionManager", "Remote DataChannel received")
-                        if (channel != null) attachDataChannel(channel)
+                        if (channel != null) attachDataChannel(channel, isPending = true)
                     }
 
                     override fun onRenegotiationNeeded() = Unit
@@ -303,29 +298,24 @@ class GameSessionManager(
                 }
             )
         )
+        connectionRef = connection
         return connection
     }
 
-    private fun attachDataChannel(channel: DataChannel) {
-        dataChannel?.unregisterObserver()
-        dataChannel = channel
-        dataChannel?.registerObserver(object : DataChannel.Observer {
+    private fun attachDataChannel(channel: DataChannel, isPending: Boolean) {
+        if (isPending) {
+            pendingDataChannel = channel
+        }
+
+        pendingDataChannel?.registerObserver(object : DataChannel.Observer {
             override fun onBufferedAmountChange(previousAmount: Long) = Unit
 
             override fun onStateChange() {
                 val newState = channel.state()
                 Log.d("GameSessionManager", "DataChannel State: $newState")
-                if (newState == DataChannel.State.OPEN) {
-                    flushPendingCandidates()
-                    sendHello()
-                    _state.update { curr ->
-                        val nextStatus = if (curr.status.ordinal < SessionStatus.CONNECTED.ordinal) {
-                            SessionStatus.CONNECTED
-                        } else {
-                            curr.status
-                        }
-                        curr.copy(status = nextStatus)
-                    }
+                if (channel.state() == DataChannel.State.OPEN) {
+                    flushPendingCandidates(pendingPeerConnection)
+                    sendHello(channel) // Przedstawiamy się nowemu połączonemu węzłowi
                 }
             }
 
@@ -333,12 +323,12 @@ class GameSessionManager(
                 if (buffer.binary) return
                 val bytes = ByteArray(buffer.data.remaining())
                 buffer.data.get(bytes)
-                handleMessage(bytes.toString(Charsets.UTF_8))
+                handleMessage(bytes.toString(Charsets.UTF_8), channel)
             }
         })
     }
 
-    private fun sendHello() {
+    private fun sendHello(channel: DataChannel) {
         Log.d("GameSessionManager", "Sending Hello (isHost=$isHost)")
         val json = JSONObject().apply {
             put("type", "hello")
@@ -346,30 +336,41 @@ class GameSessionManager(
             put("nickname", localNickname)
             put("isHost", isHost)
         }
-        sendJson(json)
+        val bytes = json.toString().toByteArray(Charsets.UTF_8)
+        channel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
     }
 
-    private fun handleMessage(text: String) {
+    private fun handleMessage(text: String, channel: DataChannel) {
         Log.d("GameSessionManager", "Message received: $text")
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (json.optString("type")) {
-            "hello" -> handleHello(json)
+            "hello" -> handleHello(json, channel)
             "peer-info" -> handlePeerInfo(json)
             "game-msg" -> handleGameMessage(json)
         }
     }
 
-    private fun handleHello(json: JSONObject) {
-        val peerId = json.optString("peerId").takeIf { it.isNotBlank() } ?: return
-        val nickname = json.optString("nickname").takeIf { it.isNotBlank() } ?: peerId
-        remotePeerId = peerId
-        remoteNickname = nickname
+    private fun handleHello(json: JSONObject, channel: DataChannel) {
+        val remoteId = json.optString("peerId").takeIf { it.isNotBlank() } ?: return
+        val remoteNickname = json.optString("nickname").takeIf { it.isNotBlank() } ?: remoteId
 
-        val hostNickname = if (isHost) localNickname else nickname
-        val players = listOf(
-            PlayerInfo(id = localPeerId, nickname = localNickname, isConnected = true),
-            PlayerInfo(id = peerId, nickname = nickname, isConnected = true),
-        )
+        activeDataChannels[remoteId] = channel
+        pendingPeerConnection?.let { activePeerConnections[remoteId] = it }
+
+        pendingDataChannel = null
+        pendingPeerConnection = null
+
+        // Dodajemy gracza do stanu UI
+        val currentPlayers = _state.value.players.toMutableList()
+        if (currentPlayers.none { it.id == remoteId }) {
+            currentPlayers.add(PlayerInfo(remoteId, remoteNickname, true))
+        } else {
+            val idx = currentPlayers.indexOfFirst { it.id == remoteId }
+            currentPlayers[idx] = currentPlayers[idx].copy(isConnected = true)
+        }
+
+        val hostNickname = if (isHost) localNickname else remoteNickname
+
         _state.update { curr ->
             val nextStatus = if (!isHost) {
                 if (curr.status.ordinal < SessionStatus.WAITING_FOR_GAME_START.ordinal) SessionStatus.WAITING_FOR_GAME_START else curr.status
@@ -378,63 +379,52 @@ class GameSessionManager(
             }
             curr.copy(
                 hostNickname = hostNickname,
-                players = players,
+                players = currentPlayers,
                 status = nextStatus,
             )
         }
 
+        // Host musi ogłosić zaktualizowaną listę graczy wszystkim (w tym nowemu graczowi)
         if (isHost) {
-            sendJson(JSONObject().apply {
-                put("type", "peer-info")
-                put("peerId", localPeerId)
-                put("nickname", localNickname)
-                put("isHost", isHost)
-                put("players", JSONArray(_state.value.players.map { p ->
-                    JSONObject().apply {
-                        put("id", p.id)
-                        put("nickname", p.nickname)
-                        put("connected", p.isConnected)
-                    }
-                }))
-            })
+            broadcastPeerInfo()
+        }
+    }
+
+    private fun broadcastPeerInfo() {
+        val payload = JSONObject().apply {
+            put("type", "peer-info")
+            put("peerId", localPeerId)
+            put("nickname", localNickname)
+            put("isHost", isHost)
+            put("players", JSONArray(_state.value.players.map { p ->
+                JSONObject().apply {
+                    put("id", p.id)
+                    put("nickname", p.nickname)
+                    put("connected", p.isConnected)
+                }
+            }))
+        }
+        val bytes = payload.toString().toByteArray(Charsets.UTF_8)
+
+        activeDataChannels.values.forEach { dc ->
+            if (dc.state() == DataChannel.State.OPEN) dc.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
         }
     }
 
     private fun handlePeerInfo(json: JSONObject) {
-        val peerId = json.optString("peerId").takeIf { it.isNotBlank() } ?: return
-        val nickname = json.optString("nickname").takeIf { it.isNotBlank() } ?: peerId
-        remotePeerId = peerId
-        remoteNickname = nickname
-        val hostNickname = if (isHost) localNickname else nickname
+        if (isHost) return // Host jest źródłem prawdy, nie przetwarza tego
 
-        val players = if (json.has("players")) {
-            val arr = json.getJSONArray("players")
-            (0 until arr.length()).map { i ->
-                val obj = arr.getJSONObject(i)
-                PlayerInfo(
-                    id = obj.getString("id"),
-                    nickname = obj.getString("nickname"),
-                    isConnected = obj.optBoolean("connected", true),
-                )
-            }
-        } else {
-            listOf(
-                PlayerInfo(id = localPeerId, nickname = localNickname, isConnected = true),
-                PlayerInfo(id = peerId, nickname = nickname, isConnected = true),
+        val playersArray = json.optJSONArray("players") ?: return
+        val updatedPlayers = (0 until playersArray.length()).map { i ->
+            val obj = playersArray.getJSONObject(i)
+            PlayerInfo(
+                id = obj.getString("id"),
+                nickname = obj.getString("nickname"),
+                isConnected = obj.optBoolean("connected", true),
             )
         }
-        _state.update { curr ->
-            val nextStatus = if (!isHost) {
-                if (curr.status.ordinal < SessionStatus.WAITING_FOR_GAME_START.ordinal) SessionStatus.WAITING_FOR_GAME_START else curr.status
-            } else {
-                if (curr.status.ordinal < SessionStatus.CONNECTED.ordinal) SessionStatus.CONNECTED else curr.status
-            }
-            curr.copy(
-                players = players,
-                hostNickname = hostNickname,
-                status = nextStatus,
-            )
-        }
+
+        _state.update { it.copy(players = updatedPlayers) }
     }
 
     private fun handleGameMessage(json: JSONObject) {
@@ -451,8 +441,40 @@ class GameSessionManager(
         }
     }
 
+    private fun handleDisconnectForConnection(connection: PeerConnection?) {
+        if (connection == null) return
+
+        // Szukamy, który gracz stracił połączenie
+        val disconnectedPeerId = activePeerConnections.entries.firstOrNull { it.value == connection }?.key
+
+        if (disconnectedPeerId != null) {
+            Log.d("GameSessionManager", "Peer disconnected: $disconnectedPeerId")
+
+            // Oznaczamy go jako offline w UI
+            val currentPlayers = _state.value.players.toMutableList()
+            val idx = currentPlayers.indexOfFirst { it.id == disconnectedPeerId }
+            if (idx != -1) {
+                currentPlayers[idx] = currentPlayers[idx].copy(isConnected = false)
+            }
+
+            _state.update { it.copy(players = currentPlayers) }
+
+            if (isHost) {
+                broadcastPeerInfo()
+                sendMessage(NetworkMessage(MessageType.PLAYER_DISCONNECT, disconnectedPeerId))
+            } else {
+                // Jeśli my jesteśmy klientem i straciliśmy połączenie (czyli padł Host)
+                _state.update { it.copy(status = SessionStatus.ERROR, error = "Utracono połączenie z Hostem") }
+            }
+
+            // Sprzątanie martwych połączeń
+            activePeerConnections.remove(disconnectedPeerId)
+            activeDataChannels.remove(disconnectedPeerId)
+        }
+    }
+
     private fun sendJson(json: JSONObject) {
-        val dc = dataChannel
+        val dc = pendingDataChannel
         if (dc == null || dc.state() != DataChannel.State.OPEN) {
             Log.w("GameSessionManager", "Cannot send JSON: DataChannel is not open")
             return
@@ -477,13 +499,13 @@ class GameSessionManager(
         }.toString(2)
     }
 
-    private fun flushPendingCandidates() {
-        if (pendingRemoteCandidates.isEmpty()) return
+    private fun flushPendingCandidates(connection: PeerConnection?) {
+        if (pendingRemoteCandidates.isEmpty() || connection == null) return
         Log.d("GameSessionManager", "Flushing ${pendingRemoteCandidates.size} candidates")
         val queued = pendingRemoteCandidates.toList()
         pendingRemoteCandidates.clear()
         queued.forEach { candidate ->
-            peerConnection?.addIceCandidate(candidate, object : org.webrtc.AddIceObserver {
+            connection.addIceCandidate(candidate, object : org.webrtc.AddIceObserver {
                 override fun onAddSuccess() = Unit
                 override fun onAddFailure(error: String?) = Unit
             })
@@ -491,7 +513,7 @@ class GameSessionManager(
     }
 
     private suspend fun waitForIceGathering() {
-        val pc = peerConnection ?: return
+        val pc = pendingPeerConnection ?: return
         if (pc.iceGatheringState() == PeerConnection.IceGatheringState.COMPLETE) return
         
         try {

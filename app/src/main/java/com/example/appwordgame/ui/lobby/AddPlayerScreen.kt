@@ -142,7 +142,7 @@ fun AddPlayerScreen(
                             onClick = {
                                 val sendIntent = Intent().apply {
                                     action = Intent.ACTION_SEND
-                                    //putExtra(Intent.EXTRA_TEXT, "Hey! Join my literówki game. Here's my invitation code:\n\n${state.invitationString}")
+                                    putExtra(Intent.EXTRA_TEXT, state.invitationString)
                                     type = "text/plain"
                                 }
 

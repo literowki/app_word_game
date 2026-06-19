@@ -40,7 +40,7 @@ fun GameScreen(
     val vm: GameViewModel = viewModel()
     val state by vm.uiState.collectAsState()
 
-    LaunchedEffect(sessionManager) {
+    LaunchedEffect(sessionManager, localPlayerIndex, playerCount) {
         if (sessionManager != null) {
             val players = sessionManager.state.value.players
             val nicknames = players.mapIndexed { idx, info -> Pair(Player.activePlayers(playerCount).getOrNull(idx), info.nickname) }
