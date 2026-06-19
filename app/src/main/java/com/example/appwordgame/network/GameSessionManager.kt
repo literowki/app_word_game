@@ -1,6 +1,7 @@
 package com.example.appwordgame.network
 
 import android.content.Context
+import android.provider.ContactsContract
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -340,11 +341,11 @@ class GameSessionManager(
         channel.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
     }
 
-    private fun handleMessage(text: String) {
+    private fun handleMessage(text: String, channel: DataChannel) {
         Log.d("GameSessionManager", "Message received: $text")
         val json = runCatching { JSONObject(text) }.getOrNull() ?: return
         when (json.optString("type")) {
-            "hello" -> handleHello(json)
+            "hello" -> handleHello(json, channel)
             "peer-info" -> handlePeerInfo(json)
             "game-msg" -> handleGameMessage(json)
         }
