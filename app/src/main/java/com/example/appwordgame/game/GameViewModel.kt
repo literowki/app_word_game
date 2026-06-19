@@ -65,6 +65,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         this.playerCount = playerCount
         this.isMultiplayer = true
         subscribeToMessages()
+        refreshState()
     }
 
     fun loadFromSerializedState(
@@ -83,6 +84,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             gameState.playerNicknames.forEachIndexed { index, name ->
                 activePlayers.getOrNull(index)?.let { nicknameMap[it] = name }
             }
+            this@GameViewModel.localPlayerIndex = localPlayerIndex
             _uiState.value = _uiState.value.copy(
                 dictionaryLoading = false,
                 playerNicknames = nicknameMap,
@@ -213,7 +215,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         } else {
             val payload = buildSubmitAction(placements)
-            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", payload))
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, sessionManager?.localPeerId ?: "", payload))
             pendingPositions.clear()
             pendingTiles.clear()
             refreshState()
@@ -237,7 +239,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.value = _uiState.value.copy(moveError = r.reason)
             }
         } else {
-            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", """{"action":"PASS"}"""))
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, sessionManager?.localPeerId ?: "", """{"action":"PASS"}"""))
             pendingPositions.clear()
             pendingTiles.clear()
             refreshState()
@@ -249,7 +251,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun onShuffleRack() {
         if (isMultiplayer && !isLocalPlayersTurn()) return
         val eng = engine ?: return
-        eng.racks[eng.currentPlayer]?.shuffle()
+        val localPlayer = Player.activePlayers(eng.playerCount).getOrNull(localPlayerIndex) ?: return
+        eng.racks[localPlayer]?.shuffle()
         refreshState()
     }
 
@@ -269,7 +272,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 refreshState(gameResult = result)
             }
         } else {
-            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", """{"action":"RESIGN"}"""))
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, sessionManager?.localPeerId ?: "", """{"action":"RESIGN"}"""))
             pendingPositions.clear()
             pendingTiles.clear()
             refreshState()
@@ -336,7 +339,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         } else {
             val tilesJson = buildExchangeAction(tilesToExchange)
-            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, "", tilesJson))
+            sessionManager?.sendMessage(NetworkMessage(MessageType.GAME_ACTION, sessionManager?.localPeerId ?: "", tilesJson))
             _uiState.value = _uiState.value.copy(showExchangeDialog = false)
             refreshState()
         }
@@ -354,7 +357,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val payload = msg.payload ?: return
         val json = runCatching { JSONObject(payload) }.getOrNull() ?: return
         val action = json.optString("action")
-        val remotePlayer = getActivePlayers().getOrNull(getRemotePlayerIndex()) ?: return
+        val sessionPlayers = sessionManager?.state?.value?.players ?: emptyList()
+        val remotePlayerIdx = if (msg.fromPeer.isNotBlank()) {
+            sessionPlayers.indexOfFirst { it.id == msg.fromPeer }.takeIf { it >= 0 }
+                ?: getRemotePlayerIndex()
+        } else {
+            getRemotePlayerIndex()
+        }
+        val remotePlayer = getActivePlayers().getOrNull(remotePlayerIdx) ?: return
 
         when (action) {
             "SUBMIT" -> {

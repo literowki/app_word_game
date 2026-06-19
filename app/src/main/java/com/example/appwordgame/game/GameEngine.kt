@@ -152,15 +152,18 @@ class GameEngine(
         phase = GamePhase.FINISHED
 
         if (reason == EndReason.RESIGNATION && resignee != null) {
-            val winner = if (playerCount == 2) {
-                if (resignee == players[0]) players[1] else players[0]
+            val remaining = players.filter { it != resignee }
+                .sortedByDescending { scores.getValue(it) }
+            val winner = if (remaining.size == 1 ||
+                scores.getValue(remaining[0]) > scores.getValue(remaining[1])) {
+                remaining[0]
             } else {
-                players.first { it != resignee }
+                null
             }
             val result = GameResult(
                 winner = winner,
                 finalScores = scores.toMap(),
-                reason = reason
+                reason = reason,
             )
             gameResult = result
             return result

@@ -46,45 +46,43 @@ private val TILE_TEXT     = Color(0xFF1A0A00)
 @Composable
 fun ScoreBar(state: GameUiState, onResign: () -> Unit, modifier: Modifier = Modifier) {
     val players = state.scores.keys.sortedBy { it.ordinal }
-    Row(
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .background(Color(0xFF0D1E2E))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        players.forEachIndexed { index, player ->
-            if (index > 0) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "${state.bagRemaining}",
-                        color = Color(0xFF9CB2CC),
-                        fontSize = 13.sp
-                    )
-                    if (state.lastMoveWords.isNotEmpty()) {
-                        Text(
-                            text = state.lastMoveWords.joinToString(", ") + "  +${state.lastMoveScore}",
-                            color = Color(0xFFFFD700),
-                            fontSize = 11.sp,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "${state.bagRemaining}",
+                color = Color(0xFF9CB2CC),
+                fontSize = 13.sp,
+            )
+            if (state.lastMoveWords.isNotEmpty()) {
+                Text(
+                    text = "  ·  " + state.lastMoveWords.joinToString(", ") + "  +${state.lastMoveScore}",
+                    color = Color(0xFFFFD700),
+                    fontSize = 11.sp,
+                )
             }
-            Box(
-                modifier = Modifier.weight(1f),
-                contentAlignment = if (index == 0) Alignment.CenterStart else Alignment.CenterEnd
-            ) {
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            players.forEach { player ->
                 val nickname = state.playerNicknames[player] ?: "Gracz ${player.ordinal + 1}"
                 PlayerScore(
                     label = nickname,
                     score = state.scores[player] ?: 0,
                     active = state.currentPlayer == player && state.phase == GamePhase.PLAYING,
                     onResign = onResign,
-                    resignOnLeft = index > 0
                 )
             }
         }
@@ -97,48 +95,38 @@ private fun PlayerScore(
     score: Int,
     active: Boolean,
     onResign: () -> Unit,
-    resignOnLeft: Boolean = false
 ) {
     var showConfirm by remember { mutableStateOf(false) }
 
-    val resignX = @Composable {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = label,
+            color = if (active) Color(0xFFFFD700) else Color(0xFF9CB2CC),
+            fontSize = 11.sp,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+        )
+        Text(
+            text = score.toString(),
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+        )
         if (active) {
-            Text(
-                text = "✕",
-                color = Color(0xFFE53935),
-                fontSize = 13.sp,
-                modifier = Modifier
-                    .padding(
-                        start = if (resignOnLeft) 0.dp else 6.dp,
-                        end = if (resignOnLeft) 6.dp else 0.dp,
-                        bottom = 8.dp
-                    )
-                    .clickable { showConfirm = true }
-                    .padding(4.dp)
-            )
-        }
-    }
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        if (resignOnLeft) resignX()
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = label,
-                color = if (active) Color(0xFFFFD700) else Color(0xFF9CB2CC),
-                fontSize = 11.sp,
-                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
-            )
-            Text(
-                text = score.toString(),
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-            if (active) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Text(text = "▶", color = Color(0xFFFFD700), fontSize = 10.sp)
+                Text(
+                    text = "✕",
+                    color = Color(0xFFE53935),
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clickable { showConfirm = true }
+                        .padding(4.dp),
+                )
             }
         }
-        if (!resignOnLeft) resignX()
     }
 
     if (showConfirm) {
@@ -150,9 +138,9 @@ private fun PlayerScore(
             },
             text = {
                 Text(
-                    "Czy na pewno chcesz się poddać? Twój przeciwnik wygra partię.",
+                    "Czy na pewno chcesz się poddać? Gra zostanie zakończona.",
                     color = Color(0xFF9CB2CC),
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
                 )
             },
             confirmButton = {

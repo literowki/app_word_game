@@ -217,11 +217,10 @@ class GameSessionManager(
             message.payload?.let { put("payload", it) }
         }
         val bytes = json.toString().toByteArray(Charsets.UTF_8)
-        val buffer = DataChannel.Buffer(ByteBuffer.wrap(bytes), false)
 
         activeDataChannels.forEach { (peerId, dc) ->
             if (dc.state() == DataChannel.State.OPEN) {
-                dc.send(buffer)
+                dc.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
                 Log.d("GameSessionManager", "Sent message ${message.type} to peer: $peerId")
             }
         }
@@ -406,10 +405,9 @@ class GameSessionManager(
             }))
         }
         val bytes = payload.toString().toByteArray(Charsets.UTF_8)
-        val buffer = DataChannel.Buffer(ByteBuffer.wrap(bytes), false)
 
         activeDataChannels.values.forEach { dc ->
-            if (dc.state() == DataChannel.State.OPEN) dc.send(buffer)
+            if (dc.state() == DataChannel.State.OPEN) dc.send(DataChannel.Buffer(ByteBuffer.wrap(bytes), false))
         }
     }
 

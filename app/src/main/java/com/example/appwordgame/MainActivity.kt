@@ -126,9 +126,10 @@ private fun AppNavigation() {
 
             val addVm: AddPlayerViewModel = viewModel()
             val sessionState by sm.state.collectAsState()
+            val initialPlayerCount = remember { sm.state.value.players.size }
 
-            LaunchedEffect(sessionState.status) {
-                if (sessionState.status == SessionStatus.CONNECTED) addVm.onConnected()
+            LaunchedEffect(sessionState.players.size) {
+                if (sessionState.players.size > initialPlayerCount) addVm.onConnected()
             }
 
             AddPlayerScreen(
