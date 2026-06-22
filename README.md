@@ -35,5 +35,4 @@ The project is currently in an active development phase where the core game mech
 1. Clone the repository.
 2. Open in **Android Studio**.
 3. Build and run on two separate devices or emulators.
-4. Navigate to the **WebRTC** tab to establish a connection by exchanging SDP/ICE data.
-5. Use the **Gra** tab to play the local game logic.
+4. Play the game.
