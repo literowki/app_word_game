@@ -23,6 +23,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,10 +34,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.android.gms.nearby.Nearby
+import com.google.android.gms.nearby.connection.ConnectionInfo
+import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
+import com.google.android.gms.nearby.connection.ConnectionResolution
+import com.google.android.gms.nearby.connection.Payload
+import com.google.android.gms.nearby.connection.PayloadCallback
+import com.google.android.gms.nearby.connection.Strategy
+import com.google.android.gms.nearby.connection.AdvertisingOptions
+import com.google.android.gms.nearby.connection.PayloadTransferUpdate
 import kotlinx.coroutines.launch
 
 @Composable
@@ -106,7 +118,65 @@ fun AddPlayerScreen(
                 }
 
                 AddPlayerStep.WAITING_FOR_ANSWER -> {
-                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val context = LocalContext.current
+                    LaunchedEffect(state.invitationString) {
+                        if (state.invitationString.isNotBlank()) {
+                            // start advertising
+                            Nearby.getConnectionsClient(context).startAdvertising(
+                                "HostGame", "com.example.appwordgame",
+                                object : ConnectionLifecycleCallback() {
+                                    override fun onConnectionInitiated(
+                                        endpointId: String,
+                                        info: ConnectionInfo
+                                    ) {
+                                        // client has spoken
+                                        Nearby.getConnectionsClient(context).acceptConnection(endpointId, object : PayloadCallback() {
+                                            override fun onPayloadReceived(endpointId: String, payload: Payload) {
+                                                // host receives client's answer
+                                                val answerFromClient = String(payload.asBytes()!!)
+
+                                                // code paste to textfield
+                                                answerText.value = answerFromClient
+
+                                                // automatically clicks 'connect'
+                                                viewModel.onAnswerSubmitted()
+
+                                                scope.launch {
+                                                    try {
+                                                        val success = onConnect(answerText.value.trim())
+                                                        if (success) {
+                                                            viewModel.onConnected()
+                                                        } else {
+                                                            viewModel.onError("Connection failed")
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        viewModel.onError(e.message ?: "Connection failed")
+                                                    }
+                                                }
+                                            }
+                                            override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
+                                        })
+                                    }
+
+                                    override fun onConnectionResult(
+                                        endpointId: String,
+                                        result: ConnectionResolution
+                                    ) {
+                                        if (result.status.isSuccess) {
+                                            // BT connection successful -> send invitationString to a client
+                                            val payload = Payload.fromBytes(state.invitationString.toByteArray())
+                                            Nearby.getConnectionsClient(context).sendPayload(endpointId, payload)
+                                        }
+                                    }
+
+                                    override fun onDisconnected(endpointId: String) {}
+                                },
+                                AdvertisingOptions.Builder().setStrategy(Strategy.P2P_STAR).build()
+                            )
+                        }
+                    }
+
+                    ////
 
                     Text(
                         "Share this invitation string with the other player:",
